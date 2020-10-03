@@ -63,10 +63,14 @@ public:
 	Stat(){
 		probRcv = -1;
 		delay = 0;
+		isRcv = 0;
+		nHop = 0;
 	};
 public:
 	double probRcv;
 	double delay;
+	double isRcv;
+	double nHop;
 };
 
 bool compare_packets (const Arc *first, const Arc *second) {
@@ -177,14 +181,63 @@ int main(int argc, char **argv) {
 		risMap[m.first] = new Stat();
 	}
 
+	// Calculate Statistics for each packet
 	for (auto& m : arcMap) {
-		double totProb = 0;
+		double totProb = 1;
 		double totDelay = 0;
+		bool rcvBS = false;
+
+		for (auto& l : m.second) {
+			double linkProb = 1;
+
+			if (l->nodeEnd == 0) {
+				rcvBS = true;
+				totDelay = l->txTime - l->genTime;
+			}
+			else if (arcMap_tx[l->txTime].size() > 1){
+				linkProb = 0.5;	//TODO
+			}
+
+			totProb = totProb * linkProb;
+		}
 
 		risMap[m.first]->delay = totDelay;
 		risMap[m.first]->probRcv = totProb;
+		risMap[m.first]->nHop = m.second.size();
+		risMap[m.first]->isRcv = (rcvBS ? 1 : 0);
+
+		cout << "For packet generated at PoI " << m.first.first << " at time " << m.first.second << " we have:"
+				<< " Probability: " << risMap[m.first]->probRcv
+				<< " Delay: " << risMap[m.first]->delay
+				<< " nHops: " << risMap[m.first]->nHop
+				<< " RCV?: " << risMap[m.first]->isRcv
+				<< endl;
+
 	}
 
-	cout << endl << "End" << endl; // prints !!!Hello World!!!
+	// Calculate Statistics for each packet
+	double countEl = 0;
+	double sumProbability = 0;
+	double sumDelay = 0;
+	double sumNHops = 0;
+	double sumRcv = 0;
+
+	for (auto& m : risMap) {
+		sumProbability += m.second->probRcv;
+		sumDelay += m.second->delay;
+		sumNHops += m.second->nHop;
+		sumRcv += m.second->isRcv;
+
+		++countEl;
+	}
+
+	cout << "Total statistics are:"
+			<< " Probability: " << (sumProbability / countEl)
+			<< " Delay: " << (sumDelay / countEl)
+			<< " nHops: " << (sumNHops / countEl)
+			<< " RCV?: " << (sumRcv / countEl)
+			<< endl;
+
+	//cout << endl << "End" << endl; // prints !!!Hello World!!!
 	return EXIT_SUCCESS;
 }
