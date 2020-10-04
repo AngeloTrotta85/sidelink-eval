@@ -22,6 +22,8 @@
 
 #include <boost/algorithm/string.hpp>
 
+#include "MyCoord.h"
+
 using namespace std;
 
 class InputParser{
@@ -62,12 +64,14 @@ class Stat {
 public:
 	Stat(){
 		probRcv = -1;
+		probRcv_nolimit = -1;
 		delay = 0;
 		isRcv = 0;
 		nHop = 0;
 	};
 public:
 	double probRcv;
+	double probRcv_nolimit;
 	double delay;
 	double isRcv;
 	double nHop;
@@ -79,19 +83,98 @@ bool compare_packets (const Arc *first, const Arc *second) {
 
 int main(int argc, char **argv) {
 
+	map<int, MyCoord> uavPos;
+
 	map<pair<int, int>, list<Arc *>> arcMap;
 	map<int, list<Arc *>> arcMap_tx;
 
 	map<pair<int, int>, Stat *> risMap;
 
+	string fin_pos = string("input_pos.txt");
 	string fin = string("input.txt");
 	string fout = string("ris.txt");
+
+	double distMaxUAV = 1000.0;
+	double distMaxBS = 1000.0;
 
 	InputParser input(argc, argv);
 
 	const std::string &in_string = input.getCmdOption("-fin");
 	if (!in_string.empty()) {
 		fin = in_string;
+	}
+	const std::string &inpos_string = input.getCmdOption("-fpos");
+	if (!inpos_string.empty()) {
+		fin_pos = inpos_string;
+	}
+
+	ifstream infile_pos;
+	infile_pos.open (fin_pos, std::ifstream::in);
+	if (infile_pos.is_open()){
+		bool continue_read = true;
+		std::string line;
+
+		cout << "FILE " << fin_pos << endl;
+
+		while ( (std::getline(infile_pos, line)) && (continue_read) ) {
+			std::string delimiter_field = ";";
+			std::string delimiter_eq = ":";
+
+		    cout << "Line: " << line << endl;
+
+		    vector<string> strs;
+		    boost::split(strs, line, boost::is_any_of(";"));
+
+		    int uavIdx = -1;
+
+		    for (auto& var : strs) {
+		    	cout << var << endl;
+
+		    	vector<string> strs_var;
+		    	boost::split(strs_var, var, boost::is_any_of(":"));
+
+		    	for (auto& el : strs_var) {
+		    		cout << el << endl;
+		    	}
+
+		    	if (strs_var.size() == 2) {
+		    		if (strs_var[0].compare("U") == 0) {
+		    			uavIdx = stoi(strs_var[1]);
+		    			uavPos[uavIdx] = MyCoord::ZERO;
+		    		}
+		    		else if (strs_var[0].compare("x") == 0) {
+		    			uavPos[uavIdx].x = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("y") == 0) {
+		    			uavPos[uavIdx].y = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("POI") == 0) {
+		    			break;
+		    		}
+		    		else if (strs_var[0].compare("BS") == 0) {
+		    			break;
+		    		}
+		    		else if (strs_var[0].compare("DR") == 0) {
+
+		    		}
+		    		else if (strs_var[0].compare("DB") == 0) {
+		    			distMaxBS = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("DM") == 0) {
+		    			distMaxUAV = stod(strs_var[1]);
+
+		    			continue_read = false;
+		    		}
+		    	}
+		    }
+
+		}
+
+		infile_pos.close();
+	}
+
+	for (auto& u : uavPos) {
+		cout << "UAV" << u.first << " at pos: " << u.second << endl;
 	}
 
 	ifstream infile;
@@ -184,11 +267,13 @@ int main(int argc, char **argv) {
 	// Calculate Statistics for each packet
 	for (auto& m : arcMap) {
 		double totProb = 1;
+		double totProb_noLimit = 1;
 		double totDelay = 0;
 		bool rcvBS = false;
 
 		for (auto& l : m.second) {
 			double linkProb = 1;
+			double linkProb_noLimit = 1;
 
 			if (l->nodeEnd == 0) {
 				rcvBS = true;
@@ -196,18 +281,23 @@ int main(int argc, char **argv) {
 			}
 			else if (arcMap_tx[l->txTime].size() > 1){
 				linkProb = 0.5;	//TODO
+				linkProb = calculate
+				linkProb_noLimit = 0.5;	//TODO
 			}
 
 			totProb = totProb * linkProb;
+			totProb_noLimit = totProb_noLimit * linkProb_noLimit;
 		}
 
 		risMap[m.first]->delay = totDelay;
 		risMap[m.first]->probRcv = totProb;
+		risMap[m.first]->probRcv_nolimit = totProb_noLimit;
 		risMap[m.first]->nHop = m.second.size();
 		risMap[m.first]->isRcv = (rcvBS ? 1 : 0);
 
 		cout << "For packet generated at PoI " << m.first.first << " at time " << m.first.second << " we have:"
 				<< " Probability: " << risMap[m.first]->probRcv
+				<< " Probability(NoLimits): " << risMap[m.first]->probRcv_nolimit
 				<< " Delay: " << risMap[m.first]->delay
 				<< " nHops: " << risMap[m.first]->nHop
 				<< " RCV?: " << risMap[m.first]->isRcv
@@ -218,12 +308,14 @@ int main(int argc, char **argv) {
 	// Calculate Statistics for each packet
 	double countEl = 0;
 	double sumProbability = 0;
+	double sumProbability_nolimit = 0;
 	double sumDelay = 0;
 	double sumNHops = 0;
 	double sumRcv = 0;
 
 	for (auto& m : risMap) {
 		sumProbability += m.second->probRcv;
+		sumProbability_nolimit += m.second->probRcv_nolimit;
 		sumDelay += m.second->delay;
 		sumNHops += m.second->nHop;
 		sumRcv += m.second->isRcv;
@@ -233,6 +325,7 @@ int main(int argc, char **argv) {
 
 	cout << "Total statistics are:"
 			<< " Probability: " << (sumProbability / countEl)
+			<< " Probability(NoLimits): " << (sumProbability_nolimit / countEl)
 			<< " Delay: " << (sumDelay / countEl)
 			<< " nHops: " << (sumNHops / countEl)
 			<< " RCV?: " << (sumRcv / countEl)
