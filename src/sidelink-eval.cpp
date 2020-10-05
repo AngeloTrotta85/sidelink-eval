@@ -19,6 +19,7 @@
 #include <ctime>
 #include <random>
 #include <chrono>
+#include <complex>      // std::complex, std::real
 
 #include <boost/algorithm/string.hpp>
 
@@ -58,6 +59,8 @@ public:
 	int channel;
 	int genPoI;
 	int genTime;
+
+	map<int, double> rcvRSS_fromStart;
 };
 
 class Stat {
@@ -81,7 +84,146 @@ bool compare_packets (const Arc *first, const Arc *second) {
 	return (first->txTime < second->txTime);
 }
 
+double linear2dBm(double x) {
+	return (10.0 * log10(x * 1000.0));
+}
+
+double dbm2linear(double x) {
+	return pow(10.0, (x-30.0)/10.0);
+	//return (10.0 * log10(x * 1000.0));
+}
+
+double getRealNormal (double mean, double stdev, default_random_engine &generator_rand) {
+	std::normal_distribution<double> n_distribution(mean, stdev);
+	return n_distribution(generator_rand);
+}
+
+double getUAVChannelLoss (double freq, double tx_height, double rx_height, double dist) {
+	//double C = 0;
+	//double temp = rx_height * (1.1 * log10(freq) - 0.7) - (1.56 * log10(freq) - 0.8);
+	//double sigma = 8; // Standard Deviation for Shadowing Effect
+
+	double path_loss;
+	path_loss = 41.1 + 20.9 * log10(dist);
+	//double path_loss = 41.1 + 41.8 * log10(dist);
+	//path_loss = 41.1 + 41.8 * log10(dist);
+
+	//path_loss = (20.0 * log10(dist)) + (20.0 * log10(freq)) - 27.55;	//free space path loss
+	//double alpha = 2.05;
+	//path_loss = ((20.0 * log10(1.0)) + (20.0 * log10(freq)) - 27.55) + (10.0 * alpha * log10(dist));	//log distance path loss (free-space at d_0=1)
+
+	/*if (randomness) {
+		//double path_loss = 46.3 + 33.9 * log10(freq) - 13.82 * log10(tx_height) - temp + log10(dist/1000.0)*(44.9 - 6.55 * log10(tx_height))+C;
+		double channel_loss = -path_loss + (-1 * sigma * RandomGenerator::getInstance().getRealNormal(0, 1));
+
+		return channel_loss;
+	}
+	else {*/
+		return -path_loss;
+	//}
+}
+
+double rss(MyCoord src, MyCoord dst) {
+
+	double distance = src.distance(dst);
+
+	double UAV_TX_pt_db = 23; //24;
+	//double UAV_TX_pt_watt = 0.2512;
+	//double GAIN_ag_watt = pow(10.0, 0.6);  //% Transmiter Antenna Gain (6 dB)
+	double GAIN_ag_db = 6;
+	double freq = 3410;
+	double tx_height = 30;
+	double rx_height = 30;
+	//double distance = u_src->actual_coord.distance(u_dst->actual_coord);
+	double loss_dB = getUAVChannelLoss(freq,tx_height,rx_height,distance);
+
+	double receivedPower_db = UAV_TX_pt_db + GAIN_ag_db + loss_dB;
+	double receivedPower = pow(10.0, receivedPower_db / 10.0) / 1000.0;
+	//double receivedPower = UAV_TX_pt * GAIN_ag * pow(10.0, loss_dB/10.0) ;//(10.^((loss_dB)/10)); // received power including path loss,shadowing
+
+	return receivedPower;
+}
+
+double rss_with_fading(MyCoord src, MyCoord dst, default_random_engine &generator_rand) {
+
+	double receivedPower = rss(src, dst);
+
+	double fading_variance = 1.59; // Fading model is Complex Gaussian Random Variable
+	double chan_real = sqrt(fading_variance/2) * getRealNormal(0, 1, generator_rand);
+	double chan_complex = getRealNormal(0, 1, generator_rand);
+	std::complex<double> chan (chan_real, chan_complex);
+	//chan = sqrt(fading_variance/2) * RandomGenerator::getInstance().getRealNormal(0, 1) + 1i*RandomGenerator::getInstance().getRealNormal(0, 1);
+	double chan_value = std::abs(chan); // fading loss
+
+	receivedPower *= chan_value;
+
+
+	return receivedPower;
+}
+
+double getProb_sigmoid(double sinr) {
+	return (1.0 / (1.0 + exp((10.0 - sinr)*0.25)));
+}
+
+double getProb_linear(double sinr) {
+	if (sinr <= -5.0) {
+		return 0.0;
+	}
+	else if (sinr >= 25.0) {
+		return 1.0;
+	}
+	else {
+		return ((sinr+5.0)/30.0);
+	}
+}
+
+double calculateProbability(default_random_engine &generator_rand, Arc *actTx, list<Arc *> &uavTxList, map<int, MyCoord> &uavPosMap, double dMaxUAV) {
+	double pRis = 1;
+
+	// Calculate Noise Parameters
+	double temperature = 290; // Kelvin
+	double k = 1.3806488 * pow(10.0, -23.0); // Boltzman Constant
+	double bw = 9*1e6; // Effective Bandwidth of channel (9 MHz)
+	double ue_noise_figure = 7 ; // 7 dB noise figure is considered
+	double noise = linear2dBm(k * temperature * bw);
+	double total_noise_dBm = ue_noise_figure + noise;
+	double total_noise = pow(10.0, total_noise_dBm/10.0) / 1000.0;
+
+	double rcvPow = actTx->rcvRSS_fromStart[actTx->nodeEnd]; //rss_with_fading(uavPosMap[actTx->nodeStart], uavPosMap[actTx->nodeEnd], generator_rand);
+
+	cout << "      Dist: " << uavPosMap[actTx->nodeStart].distance(uavPosMap[actTx->nodeEnd]) << "; RcvPow: " << rcvPow << "; Noise: " << total_noise;
+
+	double sumInterf = 0;
+	cout << "; [";
+	for (auto& interfLink : uavTxList) {
+		if (interfLink->id != actTx->id) {
+			double interActLink = 0;
+			if (	(interfLink->channel == actTx->channel) &&
+					(uavPosMap[interfLink->nodeStart].distance(uavPosMap[actTx->nodeEnd]) <= dMaxUAV)
+			){
+				interActLink = interfLink->rcvRSS_fromStart[actTx->nodeEnd];//rss_with_fading(uavPosMap[interfLink->nodeStart], uavPosMap[actTx->nodeEnd], generator_rand);
+				sumInterf += interActLink;
+				cout << "!";
+			}
+			cout << "U:" << interfLink->nodeStart << "=" << interActLink << ";d:" << uavPosMap[interfLink->nodeStart].distance(uavPosMap[actTx->nodeEnd]) << "|";
+		}
+	}
+	cout << "]";
+
+	double sinr = linear2dBm(rcvPow / (total_noise + sumInterf));
+
+	cout << "; TotInt: " << sumInterf << "; SINR: " << sinr;
+
+	pRis = getProb_linear(sinr);
+
+	cout << endl;
+
+	return pRis;
+}
+
 int main(int argc, char **argv) {
+
+	default_random_engine generator_rand = std::default_random_engine();
 
 	map<int, MyCoord> uavPos;
 
@@ -99,6 +241,15 @@ int main(int argc, char **argv) {
 
 	InputParser input(argc, argv);
 
+	const std::string &seedUser = input.getCmdOption("-seed");
+	if (!seedUser.empty()) {
+		int seedR = atoi(seedUser.c_str());
+		generator_rand.seed(seedR);
+	}
+	else {
+		unsigned seedR = std::chrono::system_clock::now().time_since_epoch().count();
+		generator_rand.seed(seedR);
+	}
 	const std::string &in_string = input.getCmdOption("-fin");
 	if (!in_string.empty()) {
 		fin = in_string;
@@ -173,6 +324,15 @@ int main(int argc, char **argv) {
 		infile_pos.close();
 	}
 
+	const std::string &dm_string = input.getCmdOption("-dm");
+	if (!dm_string.empty()) {
+		distMaxUAV = stod(dm_string);
+	}
+	const std::string &db_string = input.getCmdOption("-db");
+	if (!db_string.empty()) {
+		distMaxBS = stod(db_string);
+	}
+
 	for (auto& u : uavPos) {
 		cout << "UAV" << u.first << " at pos: " << u.second << endl;
 	}
@@ -235,6 +395,18 @@ int main(int argc, char **argv) {
 		    	++colIdx;
 		    }
 
+		    //cout << "      Rcv Signal -> ";
+		    for (auto& intUAV : uavPos) {
+		    	if (intUAV.first != a->nodeStart) {
+		    		double rss_rcv = rss_with_fading(uavPos[a->nodeStart], intUAV.second, generator_rand);
+		    		//a->rcvRSS_fromStart[a->nodeEnd] = rss_rcv;
+		    		a->rcvRSS_fromStart[intUAV.first] = rss_rcv;
+
+		    		//cout << "U:" << intUAV.first << "=" << rss_rcv << " ";
+		    	}
+		    }
+		    //cout << endl;
+
 		    //if (arcMap.count(a->gen) == 0) {
 		    //	arcMap[a->gen] = std::list<Arc *>();
 		    //}
@@ -258,6 +430,20 @@ int main(int argc, char **argv) {
 				cerr << "   From " << l->nodeStart << " to " << l->nodeEnd << " using channel " << l->channel << " at time slot " << l->txTime << endl;
 			}
 			start = l->nodeEnd;
+
+			cout << "      Rcv Signal -> ";
+			for (auto& dstUAV : l->rcvRSS_fromStart) {
+				cout << "U:" << dstUAV.first << "=" << dstUAV.second << " ";
+			}
+			/*for (auto& intUAV : uavPos) {
+				if (intUAV.first != l->nodeStart) {
+					double rss_rcv = rss_with_fading(uavPos[l->nodeStart], intUAV.second, generator_rand);
+					l->rcvRSS_fromStart[l->nodeEnd] = rss_rcv;
+
+					cout << "U:" << intUAV.first << "=" << rss_rcv << " ";
+				}
+			}*/
+			cout << endl;
 		}
 		cout << endl;
 
@@ -271,19 +457,32 @@ int main(int argc, char **argv) {
 		double totDelay = 0;
 		bool rcvBS = false;
 
+		cout << "For packet generated at PoI " << m.first.first << " at time " << m.first.second << " we have: " << endl;
+
 		for (auto& l : m.second) {
 			double linkProb = 1;
 			double linkProb_noLimit = 1;
 
+			cout << "   From " << l->nodeStart << " to " << l->nodeEnd << " using channel " << l->channel << " at time slot " << l->txTime << endl;
+
 			if (l->nodeEnd == 0) {
-				rcvBS = true;
 				totDelay = l->txTime - l->genTime;
+				if (uavPos[l->nodeStart].length() > distMaxBS) {
+					linkProb = 0;
+					rcvBS = false;
+				}
+				else {
+					rcvBS = true;
+				}
 			}
-			else if (arcMap_tx[l->txTime].size() > 1){
-				linkProb = 0.5;	//TODO
-				linkProb = calculate
-				linkProb_noLimit = 0.5;	//TODO
+			else if (arcMap_tx[l->txTime].size() > 0){
+				//linkProb = 0.5;	//TODO
+				linkProb = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, distMaxUAV);
+				//linkProb_noLimit = 0.5;	//TODO
+				linkProb_noLimit = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, numeric_limits<double>::max());
 			}
+
+			cout << "   Final lProb: " << linkProb << " lProbNL: " << linkProb_noLimit << endl;
 
 			totProb = totProb * linkProb;
 			totProb_noLimit = totProb_noLimit * linkProb_noLimit;
@@ -301,7 +500,7 @@ int main(int argc, char **argv) {
 				<< " Delay: " << risMap[m.first]->delay
 				<< " nHops: " << risMap[m.first]->nHop
 				<< " RCV?: " << risMap[m.first]->isRcv
-				<< endl;
+				<< endl << endl;
 
 	}
 
