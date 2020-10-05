@@ -254,6 +254,10 @@ int main(int argc, char **argv) {
 	if (!in_string.empty()) {
 		fin = in_string;
 	}
+	const std::string &out_string = input.getCmdOption("-fout");
+	if (!out_string.empty()) {
+		fout = out_string;
+	}
 	const std::string &inpos_string = input.getCmdOption("-fpos");
 	if (!inpos_string.empty()) {
 		fin_pos = inpos_string;
@@ -398,7 +402,16 @@ int main(int argc, char **argv) {
 		    //cout << "      Rcv Signal -> ";
 		    for (auto& intUAV : uavPos) {
 		    	if (intUAV.first != a->nodeStart) {
-		    		double rss_rcv = rss_with_fading(uavPos[a->nodeStart], intUAV.second, generator_rand);
+
+		    		long double sum_jj = 0;
+		    		long double count_jj = 0;
+		    		for (int jj = 0; jj < 5000; jj++) {
+		    			sum_jj += rss_with_fading(uavPos[a->nodeStart], intUAV.second, generator_rand);
+		    			count_jj += 1;
+		    		}
+		    		double rss_rcv = sum_jj / count_jj;
+		    		//double rss_rcv = rss_with_fading(uavPos[a->nodeStart], intUAV.second, generator_rand);
+
 		    		//a->rcvRSS_fromStart[a->nodeEnd] = rss_rcv;
 		    		a->rcvRSS_fromStart[intUAV.first] = rss_rcv;
 
@@ -529,6 +542,18 @@ int main(int argc, char **argv) {
 			<< " nHops: " << (sumNHops / countEl)
 			<< " RCV?: " << (sumRcv / countEl)
 			<< endl;
+
+	ofstream f_out(fout, ofstream::out);
+	if (f_out.is_open()) {
+		f_out <<
+				(sumProbability / countEl) << ";" <<
+				(sumProbability_nolimit / countEl) << ";" <<
+				(sumDelay / countEl) << ";" <<
+				(sumNHops / countEl) << ";" <<
+				(sumRcv / countEl) << endl;
+
+		f_out.close();
+	}
 
 	//cout << endl << "End" << endl; // prints !!!Hello World!!!
 	return EXIT_SUCCESS;
