@@ -50,6 +50,23 @@ private:
 	std::vector <std::string> tokens;
 };
 
+class SinrLimits {
+public:
+	double k1snr;
+	double k2snr;
+	double l1snr;
+	double l2snr;
+
+	double k1sinr;
+	double k2sinr;
+	double l1sinr;
+	double l2sinr;
+
+	double distMaxUAV;
+	double distMaxInterf;
+	double distMaxBS;
+};
+
 class Arc {
 public:
 	int id;
@@ -177,7 +194,33 @@ double getProb_linear(double sinr) {
 	}
 }
 
-double calculateProbability(default_random_engine &generator_rand, Arc *actTx, list<Arc *> &uavTxList, map<int, MyCoord> &uavPosMap, double dMaxUAV) {
+double getProb_linear(double sinr, bool withInterference, SinrLimits *sigLimits) {
+	double l1, l2, k1, k2;
+	if (withInterference){
+		l1 = sigLimits->l1sinr;
+		l2 = sigLimits->l2sinr;
+		k1 = sigLimits->k1sinr;
+		k2 = sigLimits->k2sinr;
+	}
+	else {
+		l1 = sigLimits->l1snr;
+		l2 = sigLimits->l2snr;
+		k1 = sigLimits->k1snr;
+		k2 = sigLimits->k2snr;
+	}
+
+	if (sinr <= l1) {
+		return 0.0;
+	}
+	else if (sinr >= l2) {
+		return 1.0;
+	}
+	else {
+		return ((sinr+k1)*k2);
+	}
+}
+
+double calculateProbability(default_random_engine &generator_rand, Arc *actTx, list<Arc *> &uavTxList, map<int, MyCoord> &uavPosMap, double dMaxInterf, SinrLimits *sigLimits) {
 	double pRis = 1;
 
 	// Calculate Noise Parameters
@@ -198,13 +241,22 @@ double calculateProbability(default_random_engine &generator_rand, Arc *actTx, l
 	for (auto& interfLink : uavTxList) {
 		if (interfLink->id != actTx->id) {
 			double interActLink = 0;
-			if (	(interfLink->channel == actTx->channel) &&
+			/*if (	(interfLink->channel == actTx->channel) &&
 					(uavPosMap[interfLink->nodeStart].distance(uavPosMap[actTx->nodeEnd]) <= dMaxUAV)
 			){
 				interActLink = interfLink->rcvRSS_fromStart[actTx->nodeEnd];//rss_with_fading(uavPosMap[interfLink->nodeStart], uavPosMap[actTx->nodeEnd], generator_rand);
 				sumInterf += interActLink;
 				cout << "!";
+			}*/
+
+			if (	(interfLink->channel == actTx->channel) &&
+					(uavPosMap[interfLink->nodeStart].distance(uavPosMap[actTx->nodeEnd]) <= dMaxInterf)
+			){
+				interActLink = interfLink->rcvRSS_fromStart[actTx->nodeEnd];//rss_with_fading(uavPosMap[interfLink->nodeStart], uavPosMap[actTx->nodeEnd], generator_rand);
+				sumInterf += interActLink;
+				cout << "!";
 			}
+
 			cout << "U:" << interfLink->nodeStart << "=" << interActLink << ";d:" << uavPosMap[interfLink->nodeStart].distance(uavPosMap[actTx->nodeEnd]) << "|";
 		}
 	}
@@ -214,7 +266,13 @@ double calculateProbability(default_random_engine &generator_rand, Arc *actTx, l
 
 	cout << "; TotInt: " << sumInterf << "; SINR: " << sinr;
 
-	pRis = getProb_linear(sinr);
+	if (sumInterf > 0) {
+		pRis = getProb_linear(sinr, true, sigLimits);
+	}
+	else {
+		pRis = getProb_linear(sinr, false, sigLimits);
+	}
+	//pRis = getProb_linear(sinr);
 
 	cout << endl;
 
@@ -224,6 +282,8 @@ double calculateProbability(default_random_engine &generator_rand, Arc *actTx, l
 int main(int argc, char **argv) {
 
 	default_random_engine generator_rand = std::default_random_engine();
+
+	SinrLimits *signalLimits = new SinrLimits();
 
 	map<int, MyCoord> uavPos;
 
@@ -236,8 +296,23 @@ int main(int argc, char **argv) {
 	string fin = string("input.txt");
 	string fout = string("ris.txt");
 
-	double distMaxUAV = 1000.0;
-	double distMaxBS = 1000.0;
+	//double distMaxUAV = 1000.0;
+	//double distMaxInterf = 1000.0;
+	//double distMaxBS = 1000.0;
+
+	//errors
+	double pathErrorSum = 0;
+	//double pathErrorCount = 0;
+
+	double sndRcvErrorSum = 0;
+	//double sndRcvErrorCount = 0;
+
+	double multRcvErrorSum = 0;
+	//double multRcvErrorCount = 0;
+
+	double multSndErrorSum = 0;
+	//double multSndErrorCount = 0;
+
 
 	InputParser input(argc, argv);
 
@@ -269,13 +344,13 @@ int main(int argc, char **argv) {
 		bool continue_read = true;
 		std::string line;
 
-		cout << "FILE " << fin_pos << endl;
+		//cout << "FILE " << fin_pos << endl;
 
 		while ( (std::getline(infile_pos, line)) && (continue_read) ) {
 			std::string delimiter_field = ";";
 			std::string delimiter_eq = ":";
 
-		    cout << "Line: " << line << endl;
+		    //cout << "Line: " << line << endl;
 
 		    vector<string> strs;
 		    boost::split(strs, line, boost::is_any_of(";"));
@@ -283,14 +358,14 @@ int main(int argc, char **argv) {
 		    int uavIdx = -1;
 
 		    for (auto& var : strs) {
-		    	cout << var << endl;
+		    	//cout << var << endl;
 
 		    	vector<string> strs_var;
 		    	boost::split(strs_var, var, boost::is_any_of(":"));
 
-		    	for (auto& el : strs_var) {
-		    		cout << el << endl;
-		    	}
+		    	//for (auto& el : strs_var) {
+		    	//	cout << el << endl;
+		    	//}
 
 		    	if (strs_var.size() == 2) {
 		    		if (strs_var[0].compare("U") == 0) {
@@ -313,12 +388,39 @@ int main(int argc, char **argv) {
 
 		    		}
 		    		else if (strs_var[0].compare("DB") == 0) {
-		    			distMaxBS = stod(strs_var[1]);
+		    			signalLimits->distMaxBS = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("DI") == 0) {
+		    			signalLimits->distMaxInterf = stod(strs_var[1]);
 		    		}
 		    		else if (strs_var[0].compare("DM") == 0) {
-		    			distMaxUAV = stod(strs_var[1]);
+		    			signalLimits->distMaxUAV = stod(strs_var[1]);
 
 		    			continue_read = false;
+		    		}
+		    		else if (strs_var[0].compare("K1SNR") == 0) {
+		    			signalLimits->k1snr = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("K2SNR") == 0) {
+		    			signalLimits->k2snr = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("L1SNR") == 0) {
+		    			signalLimits->l1snr = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("L2SNR") == 0) {
+		    			signalLimits->l2snr = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("K1SINR") == 0) {
+		    			signalLimits->k1sinr = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("K2SINR") == 0) {
+		    			signalLimits->k2sinr = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("L1SINR") == 0) {
+		    			signalLimits->l1sinr = stod(strs_var[1]);
+		    		}
+		    		else if (strs_var[0].compare("L2SINR") == 0) {
+		    			signalLimits->l2sinr = stod(strs_var[1]);
 		    		}
 		    	}
 		    }
@@ -330,16 +432,31 @@ int main(int argc, char **argv) {
 
 	const std::string &dm_string = input.getCmdOption("-dm");
 	if (!dm_string.empty()) {
-		distMaxUAV = stod(dm_string);
+		signalLimits->distMaxUAV = stod(dm_string);
 	}
 	const std::string &db_string = input.getCmdOption("-db");
 	if (!db_string.empty()) {
-		distMaxBS = stod(db_string);
+		signalLimits->distMaxBS = stod(db_string);
 	}
 
 	for (auto& u : uavPos) {
 		cout << "UAV" << u.first << " at pos: " << u.second << endl;
 	}
+	cout << "K1SNR:" << signalLimits->k1snr
+			<< ";K2SNR:" << signalLimits->k2snr
+			<< ";K1SINR:" << signalLimits->k1sinr
+			<< ";K2SINR:" << signalLimits->k2sinr
+			<< endl;
+	cout << "L1SNR:" << signalLimits->l1snr
+			<< ";L2SNR:" << signalLimits->l2snr
+			<< ";L1SINR:" << signalLimits->l1sinr
+			<< ";L2SINR:" << signalLimits->l2sinr
+			<< endl;
+
+	cout << "DM:" << signalLimits->distMaxUAV
+			<< ";DI:" << signalLimits->distMaxInterf
+			<< ";DB:" << signalLimits->distMaxBS
+			<< endl;
 
 	ifstream infile;
 	infile.open (fin, std::ifstream::in);
@@ -351,7 +468,11 @@ int main(int argc, char **argv) {
 			std::string delimiter_field = ";";
 			std::string delimiter_eq = ":";
 
-		    cout << "Line: " << line << endl;
+		    //cout << "Line: " << line << endl;
+
+		    if (line.rfind("U:", 0) != 0) {
+		    	continue;
+		    }
 
 		    vector<string> strs;
 		    boost::split(strs, line, boost::is_any_of(";"));
@@ -361,14 +482,14 @@ int main(int argc, char **argv) {
 
 		    int colIdx = 0;
 		    for (auto& var : strs) {
-		    	cout << var << endl;
+		    	//cout << var << endl;
 
 		    	vector<string> strs_var;
 		    	boost::split(strs_var, var, boost::is_any_of(":"));
 
-		    	for (auto& el : strs_var) {
-		    		cout << el << endl;
-		    	}
+		    	//for (auto& el : strs_var) {
+		    	//	cout << el << endl;
+		    	//}
 
 		    	if (strs_var.size() == 2) {
 		    		if (strs_var[0].compare("U") == 0) {
@@ -441,7 +562,10 @@ int main(int argc, char **argv) {
 			if ( ((start >= 0) && (start != l->nodeStart)) || (l->nodeStart == l->nodeEnd)) {
 				cerr << "Error in calculating the routing" << endl;
 				cerr << "   From " << l->nodeStart << " to " << l->nodeEnd << " using channel " << l->channel << " at time slot " << l->txTime << endl;
+
+				pathErrorSum += 1;
 			}
+			//pathErrorCount += 1;
 			start = l->nodeEnd;
 
 			cout << "      Rcv Signal -> ";
@@ -480,7 +604,7 @@ int main(int argc, char **argv) {
 
 			if (l->nodeEnd == 0) {
 				totDelay = l->txTime - l->genTime;
-				if (uavPos[l->nodeStart].length() > distMaxBS) {
+				if (uavPos[l->nodeStart].length() > signalLimits->distMaxBS) {
 					linkProb = 0;
 					rcvBS = false;
 				}
@@ -489,10 +613,75 @@ int main(int argc, char **argv) {
 				}
 			}
 			else if (arcMap_tx[l->txTime].size() > 0){
-				//linkProb = 0.5;	//TODO
-				linkProb = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, distMaxUAV);
-				//linkProb_noLimit = 0.5;	//TODO
-				linkProb_noLimit = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, numeric_limits<double>::max());
+
+				//check if he receiver is also sending
+				bool isMultipleTx = false;
+				for (auto& lcheck : arcMap_tx[l->txTime]) {
+					if (	(l->id != lcheck->id) &&
+							(l->nodeStart == lcheck->nodeStart) &&
+							(l->channel == lcheck->channel)
+					){
+						isMultipleTx = true;
+						break;
+					}
+				}
+				if (isMultipleTx) {
+					linkProb = 0;
+					linkProb_noLimit = 0;
+					multSndErrorSum += 1;
+				}
+				else {
+
+					//check if he receiver is also sending
+					bool isRcvSending = false;
+					for (auto& lcheck : arcMap_tx[l->txTime]) {
+						if (l->nodeEnd == lcheck->nodeStart) {
+							isRcvSending = true;
+							break;
+						}
+					}
+					if (isRcvSending) {
+						linkProb = 0;
+						linkProb_noLimit = 0;
+						sndRcvErrorSum += 1;
+					}
+					else {
+
+						// check if the receiver is receiving from multiple sources (same channel)
+						bool rcvCollision = false;
+						bool isThisTheBest = true;
+						for (auto& lcheck : arcMap_tx[l->txTime]) {
+							if (	(l->id != lcheck->id) &&
+									(l->nodeEnd == lcheck->nodeEnd) &&
+									(l->channel == lcheck->channel)
+							){
+								rcvCollision = true;
+								if (uavPos[l->nodeStart].distance(uavPos[l->nodeEnd]) > uavPos[lcheck->nodeStart].distance(uavPos[lcheck->nodeEnd])) {
+									isThisTheBest = false;
+									break;
+								}
+							}
+						}
+						if (rcvCollision) {
+							multRcvErrorSum += 1;
+						}
+						if (!isThisTheBest) {
+							linkProb = 0;
+							linkProb_noLimit = 0;
+						}
+						else {
+							if (uavPos[l->nodeStart].distance(uavPos[l->nodeEnd]) > signalLimits->distMaxUAV) {
+								linkProb = 0;
+							}
+							else {
+								linkProb = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, signalLimits->distMaxInterf, signalLimits);
+							}
+							//linkProb = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, signalLimits->distMaxInterf, signalLimits);
+
+							linkProb_noLimit = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, numeric_limits<double>::max(), signalLimits);
+						}
+					}
+				}
 			}
 
 			cout << "   Final lProb: " << linkProb << " lProbNL: " << linkProb_noLimit << endl;
@@ -550,7 +739,17 @@ int main(int argc, char **argv) {
 				(sumProbability_nolimit / countEl) << ";" <<
 				(sumDelay / countEl) << ";" <<
 				(sumNHops / countEl) << ";" <<
-				(sumRcv / countEl) << endl;
+				(sumRcv / countEl) << ";" <<
+				arcMap.size() << ";" <<
+				pathErrorSum << ";" <<
+				sndRcvErrorSum << ";" <<
+				multRcvErrorSum << ";" <<
+				multSndErrorSum <<
+				//(((arcMap.size() > 1) && (pathErrorSum > 1)) ? (pathErrorSum / ((double)arcMap.size())) : 0) << ";" <<
+				//(((arcMap.size() > 1) && (sndRcvErrorSum > 1)) ? (sndRcvErrorSum / ((double)arcMap.size())) : 0) << ";" <<
+				//(((arcMap.size() > 1) && (multRcvErrorSum > 1)) ? (multRcvErrorSum / ((double)arcMap.size())) : 0) << ";" <<
+				//(((arcMap.size() > 1) && (multSndErrorSum > 1)) ? (multSndErrorSum / ((double)arcMap.size())) : 0) <<
+				endl;
 
 		f_out.close();
 	}
@@ -558,3 +757,10 @@ int main(int argc, char **argv) {
 	//cout << endl << "End" << endl; // prints !!!Hello World!!!
 	return EXIT_SUCCESS;
 }
+
+
+
+
+
+
+
