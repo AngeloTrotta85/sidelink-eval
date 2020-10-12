@@ -313,6 +313,7 @@ int main(int argc, char **argv) {
 	double multSndErrorSum = 0;
 	//double multSndErrorCount = 0;
 
+	double distErrorSum = 0;
 
 	InputParser input(argc, argv);
 
@@ -587,6 +588,8 @@ int main(int argc, char **argv) {
 		risMap[m.first] = new Stat();
 	}
 
+	//std::vector<int> simultTx(uavPos.size(), 0);
+
 	// Calculate Statistics for each packet
 	for (auto& m : arcMap) {
 		double totProb = 1;
@@ -613,7 +616,6 @@ int main(int argc, char **argv) {
 				}
 			}
 			else if (arcMap_tx[l->txTime].size() > 0){
-
 				//check if the receiver is also sending
 				bool isMultipleTx = false;
 				for (auto& lcheck : arcMap_tx[l->txTime]) {
@@ -679,6 +681,7 @@ int main(int argc, char **argv) {
 						else {
 							if (uavPos[l->nodeStart].distance(uavPos[l->nodeEnd]) > signalLimits->distMaxUAV) {
 								linkProb = 0;
+								++distErrorSum;
 							}
 							else {
 								linkProb = calculateProbability(generator_rand, l, arcMap_tx[l->txTime], uavPos, signalLimits->distMaxInterf, signalLimits);
@@ -751,7 +754,8 @@ int main(int argc, char **argv) {
 				pathErrorSum << ";" <<
 				sndRcvErrorSum << ";" <<
 				multRcvErrorSum << ";" <<
-				multSndErrorSum <<
+				multSndErrorSum << ";" <<
+				distErrorSum <<
 				//(((arcMap.size() > 1) && (pathErrorSum > 1)) ? (pathErrorSum / ((double)arcMap.size())) : 0) << ";" <<
 				//(((arcMap.size() > 1) && (sndRcvErrorSum > 1)) ? (sndRcvErrorSum / ((double)arcMap.size())) : 0) << ";" <<
 				//(((arcMap.size() > 1) && (multRcvErrorSum > 1)) ? (multRcvErrorSum / ((double)arcMap.size())) : 0) << ";" <<
