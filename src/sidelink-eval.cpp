@@ -614,7 +614,7 @@ int main(int argc, char **argv) {
 			}
 			else if (arcMap_tx[l->txTime].size() > 0){
 
-				//check if he receiver is also sending
+				//check if the receiver is also sending
 				bool isMultipleTx = false;
 				for (auto& lcheck : arcMap_tx[l->txTime]) {
 					if (	(l->id != lcheck->id) &&
@@ -635,8 +635,15 @@ int main(int argc, char **argv) {
 					//check if he receiver is also sending
 					bool isRcvSending = false;
 					for (auto& lcheck : arcMap_tx[l->txTime]) {
-						if (l->nodeEnd == lcheck->nodeStart) {
+						if ((l->nodeEnd == lcheck->nodeStart) && (lcheck->nodeEnd != 0)) {
 							isRcvSending = true;
+
+							cout << "sndRcvErrorSum! " <<
+									"Time " << l->txTime << " " <<
+									"U" << l->nodeStart << "-U" << l->nodeEnd << " " <<
+									"U" << lcheck->nodeStart << "-U" << lcheck->nodeEnd <<
+									endl;
+
 							break;
 						}
 					}
